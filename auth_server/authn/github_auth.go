@@ -18,6 +18,7 @@ package authn
 
 import (
 	"bytes"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -82,10 +83,13 @@ func NewGitHubAuth(c *GitHubAuthConfig) (*GitHubAuth, error) {
 		return nil, err
 	}
 	glog.Infof("GitHub auth token DB at %s", dbName)
+	tr := &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	}
 	return &GitHubAuth{
 		config: c,
 		db:     db,
-		client: &http.Client{Timeout: 10 * time.Second},
+		client: &http.Client{Timeout: 10 * time.Second, Transport: tr},
 		tmpl:   template.Must(template.New("github_auth").Parse(string(MustAsset("data/github_auth.tmpl")))),
 	}, nil
 }
