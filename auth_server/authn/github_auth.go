@@ -287,7 +287,11 @@ func (gha *GitHubAuth) Authenticate(user string, password PasswordString) (bool,
 	} else if err != nil {
 		return false, nil, err
 	}
-	return true, nil, nil
+
+	// TODO: Return user's teams as "labels"
+	labels := Labels{"teams": []string{"developers"}}
+
+	return true, labels, nil
 }
 
 func (gha *GitHubAuth) Stop() {
