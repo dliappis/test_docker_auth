@@ -32,6 +32,40 @@ import (
 	"github.com/cesanta/glog"
 )
 
+type GitHubTeamCollection []GitHubTeam
+
+type GitHubTeam struct {
+	Id              int64               `json:"id"`
+	Url             string              `json:"url,omitempty"`
+	Name            string              `json:"name,omitempty"`
+	Slug            string              `json:"slug,omitempty"`
+	Description     string              `json:"description,omitempty"`
+	Privacy         string              `json:"privacy,omitempty"`
+	Permission      string              `json:"permission,omitempty"`
+	MembersUrl      string              `json:"members_url,omitempty"`
+	RepositoriesUrl string              `json:"repositories_url,omitempty"`
+	MembersCount    int64               `json:"members_count,omitempty"`
+	ReposCount      int64               `json:"repos_count,omitempty"`
+	CreatedAt       string              `json:"created_at,omitempty"`
+	UpdatedAt       string              `json:"updated_at,omitempty"`
+	Organization    *GitHubOrganization `json:"organization"`
+	Parent          string              `json:"parent,omitempty"`
+}
+
+type GitHubOrganization struct {
+	Login            string `json:"login"`
+	Id               int64  `json:"id,omitempty"`
+	Url              string `json:"url,omitempty"`
+	ReposUrl         string `json:"repos_url,omitempty"`
+	EventsUrl        string `json:"events_url,omitempty"`
+	HooksUrl         string `json:"hooks_url,omitempty"`
+	IssuesUrl        string `json:"issues_url,omitempty"`
+	MembersUrl       string `json:"members_url,omitempty"`
+	PublicMembersUrl string `json:"public_members_url,omitempty"`
+	AvatarUrl        string `json:"avatar_url,omitempty"`
+	Description      string `json:"Description,omitempty"`
+}
+
 type GitHubAuthConfig struct {
 	Organization     string                `yaml:"organization,omitempty"`
 	ClientId         string                `yaml:"client_id,omitempty"`
@@ -222,6 +256,13 @@ func (gha *GitHubAuth) validateAccessToken(token string) (user string, err error
 		return
 	}
 
+	all_teams, err := gha.fetchTeams(token)
+	if err != nil {
+		err = fmt.Errorf("could not fetch teams: %s", err)
+		return
+	}
+	fmt.Printf("%v", all_teams)
+
 	return ti.Login, nil
 }
 
@@ -252,6 +293,34 @@ func (gha *GitHubAuth) checkOrganization(token, user string) (err error) {
 	}
 
 	return fmt.Errorf("Unknown status for membership of organization %s: %s", gha.config.Organization, resp.Status)
+}
+
+func (gha *GitHubAuth) fetchTeams(token string) (GitHubTeamCollection, error) {
+	if gha.config.Organization == "" {
+		return nil, nil
+	}
+	url := fmt.Sprintf("%s/user/teams", gha.getGithubApiUri())
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		err = fmt.Errorf("could not create request to fetch user teams: %s", err)
+		return nil, err
+	}
+	req.Header.Add("Authorization", fmt.Sprintf("token %s", token))
+	req.Header.Add("Accept", "application/vnd.github.hellcat-preview+json")
+
+	resp, err := gha.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("http error while fetching user teams: %s", err)
+	}
+
+	body, _ := ioutil.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	var all_teams GitHubTeamCollection
+	err = json.Unmarshal(body, &all_teams)
+
+	fmt.Printf("%v", all_teams)
+	return all_teams, err
 }
 
 func (gha *GitHubAuth) validateServerToken(user string) (*TokenDBValue, error) {
