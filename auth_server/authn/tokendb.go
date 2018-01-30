@@ -128,6 +128,7 @@ func (db *TokenDBImpl) ValidateToken(user string, password PasswordString) error
 	if bcrypt.CompareHashAndPassword([]byte(dbv.DockerPassword), []byte(password)) != nil {
 		return WrongPass
 	}
+	glog.V(2).Infof("Checking for token expiration: [%s] > [%s]", time.Now(), dbv.ValidUntil)
 	if time.Now().After(dbv.ValidUntil) {
 		return ExpiredToken
 	}
