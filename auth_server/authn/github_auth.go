@@ -348,7 +348,7 @@ func (gha *GitHubAuth) validateServerToken(user string) (*TokenDBValue, error) {
 
 func (gha *GitHubAuth) Authenticate(user string, password PasswordString) (bool, Labels, error) {
 	err := gha.db.ValidateToken(user, password)
-	glog.Infof("Token: %s", err)
+
 	if err == ExpiredToken {
 		glog.Errorf("Token is expired: %s", err)
 
@@ -357,6 +357,7 @@ func (gha *GitHubAuth) Authenticate(user string, password PasswordString) (bool,
 			return false, nil, err
 		}
 	} else if err != nil {
+		glog.Errorf("Cannot validate token: %s", err)
 		return false, nil, err
 	}
 
