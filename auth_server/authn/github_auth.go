@@ -226,6 +226,7 @@ func (gha *GitHubAuth) doGitHubAuthCreateToken(rw http.ResponseWriter, code stri
 }
 
 func (gha *GitHubAuth) validateAccessToken(token string) (user string, err error) {
+	glog.Infof("Fetching Github API info for user")
 	req, err := http.NewRequest("GET", fmt.Sprintf("%s/user", gha.getGithubApiUri()), nil)
 	if err != nil {
 		err = fmt.Errorf("could not create request to get information for token %s: %s", token, err)
@@ -256,12 +257,14 @@ func (gha *GitHubAuth) validateAccessToken(token string) (user string, err error
 		return
 	}
 
-	all_teams, err := gha.fetchTeams(token)
+	// TODO: Move into `doGitHubAuthCreateToken`?
+	user_teams, err := gha.fetchTeams(token)
 	if err != nil {
-		err = fmt.Errorf("could not fetch teams: %s", err)
+		err = fmt.Errorf("Could not fetch user teams: %s", err)
 		return
 	}
-	fmt.Printf("%v", all_teams)
+	// TODO: Store teams for user
+	glog.Infof("User teams: %v", user_teams)
 
 	return ti.Login, nil
 }
@@ -270,6 +273,7 @@ func (gha *GitHubAuth) checkOrganization(token, user string) (err error) {
 	if gha.config.Organization == "" {
 		return nil
 	}
+	glog.Infof("Fetching Github API organization membership info")
 	url := fmt.Sprintf("%s/orgs/%s/members/%s", gha.getGithubApiUri(), gha.config.Organization, user)
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
@@ -295,7 +299,7 @@ func (gha *GitHubAuth) checkOrganization(token, user string) (err error) {
 	return fmt.Errorf("Unknown status for membership of organization %s: %s", gha.config.Organization, resp.Status)
 }
 
-func (gha *GitHubAuth) fetchTeams(token string) (GitHubTeamCollection, error) {
+func (gha *GitHubAuth) fetchTeams(token string) ([]string, error) {
 	if gha.config.Organization == "" {
 		return nil, nil
 	}
@@ -306,11 +310,12 @@ func (gha *GitHubAuth) fetchTeams(token string) (GitHubTeamCollection, error) {
 		return nil, err
 	}
 	req.Header.Add("Authorization", fmt.Sprintf("token %s", token))
+	// Currently an "experimental" API; https://developer.github.com/v3/orgs/teams/#list-user-teams
 	req.Header.Add("Accept", "application/vnd.github.hellcat-preview+json")
 
 	resp, err := gha.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("http error while fetching user teams: %s", err)
+		return nil, fmt.Errorf("HTTP error while fetching user teams: %s", err)
 	}
 
 	body, _ := ioutil.ReadAll(resp.Body)
@@ -318,9 +323,20 @@ func (gha *GitHubAuth) fetchTeams(token string) (GitHubTeamCollection, error) {
 
 	var all_teams GitHubTeamCollection
 	err = json.Unmarshal(body, &all_teams)
+	if err != nil {
+		err = fmt.Errorf("Error parsing the JSON response while fetching teams: %s", err)
+		return nil, err
+	}
 
-	fmt.Printf("%v", all_teams)
-	return all_teams, err
+	var organization_teams []string
+	for _, item := range all_teams {
+    if item.Organization.Login == gha.config.Organization {
+      organization_teams = append(organization_teams, item.Slug)
+    }
+  }
+
+	glog.Infof("Teams for the <%s> organization: %v", gha.config.Organization, organization_teams)
+	return organization_teams, err
 }
 
 func (gha *GitHubAuth) validateServerToken(user string) (*TokenDBValue, error) {
