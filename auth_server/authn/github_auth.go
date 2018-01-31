@@ -210,10 +210,16 @@ func (gha *GitHubAuth) doGitHubAuthCreateToken(rw http.ResponseWriter, code stri
 
 	glog.Infof("New GitHub auth token for %s", user)
 
+	user_teams, err := gha.fetchTeams(c2t.AccessToken)
+	if err != nil {
+		glog.Errorf("Could not fetch user teams: %s", err)
+	}
+
 	v := &TokenDBValue{
 		TokenType:   c2t.TokenType,
 		AccessToken: c2t.AccessToken,
 		ValidUntil:  time.Now().Add(gha.config.RevalidateAfter),
+		Labels:      map[string][]string{"teams": user_teams},
 	}
 	dp, err := gha.db.StoreToken(user, v, true)
 	if err != nil {
@@ -226,7 +232,7 @@ func (gha *GitHubAuth) doGitHubAuthCreateToken(rw http.ResponseWriter, code stri
 }
 
 func (gha *GitHubAuth) validateAccessToken(token string) (user string, err error) {
-	glog.Infof("Fetching Github API info for user")
+	glog.Infof("Github API: Fetching user info")
 	req, err := http.NewRequest("GET", fmt.Sprintf("%s/user", gha.getGithubApiUri()), nil)
 	if err != nil {
 		err = fmt.Errorf("could not create request to get information for token %s: %s", token, err)
@@ -257,15 +263,6 @@ func (gha *GitHubAuth) validateAccessToken(token string) (user string, err error
 		return
 	}
 
-	// TODO: Move into `doGitHubAuthCreateToken`?
-	user_teams, err := gha.fetchTeams(token)
-	if err != nil {
-		err = fmt.Errorf("Could not fetch user teams: %s", err)
-		return
-	}
-	// TODO: Store teams for user
-	glog.Infof("User teams: %v", user_teams)
-
 	return ti.Login, nil
 }
 
@@ -273,7 +270,7 @@ func (gha *GitHubAuth) checkOrganization(token, user string) (err error) {
 	if gha.config.Organization == "" {
 		return nil
 	}
-	glog.Infof("Fetching Github API organization membership info")
+	glog.Infof("Github API: Fetching organization membership info")
 	url := fmt.Sprintf("%s/orgs/%s/members/%s", gha.getGithubApiUri(), gha.config.Organization, user)
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
@@ -303,6 +300,7 @@ func (gha *GitHubAuth) fetchTeams(token string) ([]string, error) {
 	if gha.config.Organization == "" {
 		return nil, nil
 	}
+	glog.Infof("Github API: Fetching user teams")
 	url := fmt.Sprintf("%s/user/teams", gha.getGithubApiUri())
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
@@ -377,10 +375,15 @@ func (gha *GitHubAuth) Authenticate(user string, password PasswordString) (bool,
 		return false, nil, err
 	}
 
-	// TODO: Return user's teams as "labels"
-	labels := Labels{"teams": []string{"developers"}}
+	v, err := gha.db.GetValue(user)
+	if err != nil || v == nil {
+		if err == nil {
+			err = errors.New("no db value, please sign out and sign in again.")
+		}
+		return false, nil, err
+	}
 
-	return true, labels, nil
+	return true, v.Labels, nil
 }
 
 func (gha *GitHubAuth) Stop() {
