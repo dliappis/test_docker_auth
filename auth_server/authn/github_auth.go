@@ -101,10 +101,11 @@ type GitHubTokenUser struct {
 }
 
 type GitHubAuth struct {
-	config *GitHubAuthConfig
-	db     TokenDB
-	client *http.Client
-	tmpl   *template.Template
+	config      *GitHubAuthConfig
+	db          TokenDB
+	client      *http.Client
+	tmpl        *template.Template
+	tmpl_result *template.Template
 }
 
 func NewGitHubAuth(c *GitHubAuthConfig) (*GitHubAuth, error) {
@@ -113,14 +114,14 @@ func NewGitHubAuth(c *GitHubAuthConfig) (*GitHubAuth, error) {
 	dbName := c.TokenDB
 
 	switch {
-		case c.GCSTokenDB != nil:
-			db, err = NewGCSTokenDB(c.GCSTokenDB.Bucket, c.GCSTokenDB.ClientSecretFile)
-			dbName  = "GCS: " + c.GCSTokenDB.Bucket
-		case c.RedisTokenDB != nil:
-			db, err = NewRedisTokenDB(c.RedisTokenDB.Url)
-			dbName  = "Redis: " + c.RedisTokenDB.Url
-		default:
-			db, err = NewTokenDB(c.TokenDB)
+	case c.GCSTokenDB != nil:
+		db, err = NewGCSTokenDB(c.GCSTokenDB.Bucket, c.GCSTokenDB.ClientSecretFile)
+		dbName = "GCS: " + c.GCSTokenDB.Bucket
+	case c.RedisTokenDB != nil:
+		db, err = NewRedisTokenDB(c.RedisTokenDB.Url)
+		dbName = "Redis: " + c.RedisTokenDB.Url
+	default:
+		db, err = NewTokenDB(c.TokenDB)
 	}
 
 	if err != nil {
@@ -131,19 +132,31 @@ func NewGitHubAuth(c *GitHubAuthConfig) (*GitHubAuth, error) {
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 	}
 	return &GitHubAuth{
-		config: c,
-		db:     db,
-		client: &http.Client{Timeout: 10 * time.Second, Transport: tr},
-		tmpl:   template.Must(template.New("github_auth").Parse(string(MustAsset("data/github_auth.tmpl")))),
+		config:      c,
+		db:          db,
+		client:      &http.Client{Timeout: 10 * time.Second, Transport: tr},
+		tmpl:        template.Must(template.New("github_auth").Parse(string(MustAsset("data/github_auth.tmpl")))),
+		tmpl_result: template.Must(template.New("github_auth_result").Parse(string(MustAsset("data/github_auth_result.tmpl")))),
 	}, nil
 }
 
 func (gha *GitHubAuth) doGitHubAuthPage(rw http.ResponseWriter, req *http.Request) {
 	if err := gha.tmpl.Execute(rw, struct {
-		ClientId, GithubWebUri string
+		ClientId, GithubWebUri, Organization string
 	}{
 		ClientId:     gha.config.ClientId,
-		GithubWebUri: gha.getGithubWebUri()}); err != nil {
+		GithubWebUri: gha.getGithubWebUri(),
+		Organization: gha.config.Organization}); err != nil {
+		http.Error(rw, fmt.Sprintf("Template error: %s", err), http.StatusInternalServerError)
+	}
+}
+
+func (gha *GitHubAuth) doGitHubAuthResultPage(rw http.ResponseWriter, username string, password string) {
+	if err := gha.tmpl_result.Execute(rw, struct {
+		Organization, Username, Password string
+	}{Organization: gha.config.Organization,
+		Username: username,
+		Password: password}); err != nil {
 		http.Error(rw, fmt.Sprintf("Template error: %s", err), http.StatusInternalServerError)
 	}
 }
@@ -238,7 +251,7 @@ func (gha *GitHubAuth) doGitHubAuthCreateToken(rw http.ResponseWriter, code stri
 		return
 	}
 
-	fmt.Fprintf(rw, `Server logged in; now run "docker login YOUR_REGISTRY_FQDN", use %s as login and %s as password.`, user, dp)
+	gha.doGitHubAuthResultPage(rw, user, dp)
 }
 
 func (gha *GitHubAuth) validateAccessToken(token string) (user string, err error) {
@@ -338,10 +351,10 @@ func (gha *GitHubAuth) fetchTeams(token string) ([]string, error) {
 
 	var organization_teams []string
 	for _, item := range all_teams {
-    if item.Organization.Login == gha.config.Organization {
-      organization_teams = append(organization_teams, item.Slug)
-    }
-  }
+		if item.Organization.Login == gha.config.Organization {
+			organization_teams = append(organization_teams, item.Slug)
+		}
+	}
 
 	glog.Infof("Teams for the <%s> organization: %v", gha.config.Organization, organization_teams)
 	return organization_teams, err
