@@ -108,6 +108,72 @@ type GitHubAuth struct {
 	tmpl_result *template.Template
 }
 
+type linkHeader struct {
+	First string
+	Last  string
+	Next  string
+	Prev  string
+}
+
+func execGHExperimentalApiRequest(url string, token string) (*http.Response, error) {
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		err = fmt.Errorf("could not create an http request for uri: %s. Error: %s", url, err)
+		return nil, err
+	}
+	req.Header.Add("Authorization", fmt.Sprintf("token %s", token))
+	// Currently an "experimental" API; https://developer.github.com/v3/orgs/teams/#list-user-teams
+	req.Header.Add("Accept", "application/vnd.github.hellcat-preview+json")
+
+	tr := &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second, Transport: tr}
+	resp, err := client.Do(req)
+	if err != nil {
+		err = fmt.Errorf("HTTP error while retrieving %s. Error : %s", url, err)
+		return nil, err
+	}
+
+	return resp, nil
+}
+
+// Remove all occurences of stringsToStrip from sourceStr
+func removeSubstringsFromString(sourceStr string, stringsToStrip []string) string {
+	theNewString := sourceStr
+	for _, i := range stringsToStrip {
+		theNewString = strings.Replace(theNewString, i, "", -1)
+	}
+	return theNewString
+}
+
+// https://developer.github.com/v3/guides/traversing-with-pagination/
+func parseLinkHeader(linkLines []string) (linkHeader, error) {
+	var lH linkHeader
+	// URL in link is enclosed in < >
+	stringsToRemove := []string{"<", ">"}
+
+	for _, linkLine := range linkLines {
+		for _, linkItem := range strings.Split(linkLine, ",") {
+			linkData := strings.Split(linkItem, ";")
+			trimmedUrl := removeSubstringsFromString(strings.TrimSpace(linkData[0]), stringsToRemove)
+			linkVal := linkData[1]
+			switch {
+			case strings.Contains(linkVal, "first"):
+				lH.First = trimmedUrl
+			case strings.Contains(linkVal, "last"):
+				lH.Last = trimmedUrl
+			case strings.Contains(linkVal, "next"):
+				lH.Next = trimmedUrl
+			case strings.Contains(linkVal, "prev"):
+				lH.Prev = trimmedUrl
+			}
+		}
+	}
+	return lH, nil
+}
+
 func NewGitHubAuth(c *GitHubAuthConfig) (*GitHubAuth, error) {
 	var db TokenDB
 	var err error
@@ -320,33 +386,47 @@ func (gha *GitHubAuth) checkOrganization(token, user string) (err error) {
 }
 
 func (gha *GitHubAuth) fetchTeams(token string) ([]string, error) {
+	var all_teams GitHubTeamCollection
+
 	if gha.config.Organization == "" {
 		return nil, nil
 	}
 	glog.Infof("Github API: Fetching user teams")
-	url := fmt.Sprintf("%s/user/teams", gha.getGithubApiUri())
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		err = fmt.Errorf("could not create request to fetch user teams: %s", err)
-		return nil, err
-	}
-	req.Header.Add("Authorization", fmt.Sprintf("token %s", token))
-	// Currently an "experimental" API; https://developer.github.com/v3/orgs/teams/#list-user-teams
-	req.Header.Add("Accept", "application/vnd.github.hellcat-preview+json")
+	url := fmt.Sprintf("%s/user/teams?per_page=1", gha.getGithubApiUri())
+	var err error
 
-	resp, err := gha.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("HTTP error while fetching user teams: %s", err)
-	}
+	//for url != "" {
+	// Use iterator to debug results:
+	for i := 1; url != ""; i++ {
+		var paged_teams GitHubTeamCollection
+		resp, err := execGHExperimentalApiRequest(url, token)
+		if err != nil {
+			return nil, err
+		}
 
-	body, _ := ioutil.ReadAll(resp.Body)
-	resp.Body.Close()
+		respHeaders := resp.Header
+		body, _ := ioutil.ReadAll(resp.Body)
+		resp.Body.Close()
 
-	var all_teams GitHubTeamCollection
-	err = json.Unmarshal(body, &all_teams)
-	if err != nil {
-		err = fmt.Errorf("Error parsing the JSON response while fetching teams: %s", err)
-		return nil, err
+		err = json.Unmarshal(body, &paged_teams)
+		if err != nil {
+			err = fmt.Errorf("Error parsing the JSON response while fetching teams: %s", err)
+			return nil, err
+		}
+
+		all_teams = append(all_teams, paged_teams...)
+
+		// Do we need to paginate?
+		if link, ok := respHeaders["Link"]; ok {
+			parsedLink, _ := parseLinkHeader(link)
+			url = parsedLink.Next
+			fmt.Printf("--> Page <%d>\n", i)
+			fmt.Printf("Next page: <%s>\n", parsedLink.Next)
+			fmt.Printf("Prev page: <%s>\n", parsedLink.Prev)
+		} else {
+			fmt.Printf("No pagination required\n")
+			url = ""
+		}
 	}
 
 	var organization_teams []string
